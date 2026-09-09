@@ -191,3 +191,12 @@ This project is built strictly for **educational and portfolio purposes**.
   production-ready risk assessment methodology. See
   [`docs/risk_methodology.md`](docs/risk_methodology.md) for full
   methodology and limitations.
+<img width="1904" height="927" alt="Captura de tela 2026-09-09 104713" src="https://github.com/user-attachments/assets/16f887f1-f02e-4c9c-b407-499e9978bfa6" />
+<img width="1905" height="931" alt="Captura de tela 2026-09-09 104735" src="https://github.com/user-attachments/assets/264e329c-2c88-4a8e-b20b-3c9599917f91" />
+<img width="1901" height="935" alt="risk" src="https://github.com/user-attachments/assets/b8c0fca2-c43b-4676-a1c4-3b8942ff27af" />
+<img width="1905" height="934" alt="Captura de tela 2026-09-09 104644" src="https://github.com/user-attachments/assets/56c6f8ad-8cd9-4ffb-8367-6d3058106b8f" />
+
+
+
+
+
