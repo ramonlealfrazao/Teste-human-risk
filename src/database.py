@@ -87,7 +87,11 @@ CREATE TABLE IF NOT EXISTS security_incidents (
 
 def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: Streamlit can rerun the script on a
+    # different thread than the one that created the connection. This app
+    # only ever does one thing at a time per session (no concurrent writes
+    # from multiple threads), so this is safe here.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
