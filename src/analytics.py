@@ -189,3 +189,70 @@ def get_employee_profile(conn: sqlite3.Connection, employee_id: str) -> Employee
 
 def get_campaign_summaries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return db.get_all_campaigns(conn)
+
+
+@dataclass
+class TrendPoint:
+    period_date: str
+    avg_risk_score: float
+    training_completion_rate: float
+    policy_ack_rate: float
+    avg_awareness_score: float
+    phishing_click_rate: float
+    phishing_report_rate: float
+
+
+def get_trend_series(conn: sqlite3.Connection) -> list[TrendPoint]:
+    """Builds one TrendPoint per historical assessment period, aggregating
+    across all employees. Used to power the Human Risk Trends chart.
+
+    Phishing rates are computed cumulatively as of each period date (only
+    campaigns whose campaign_date has occurred by that period are counted),
+    which is why the underlying `campaigns` table carries a campaign_date.
+    """
+    assessments = db.get_all_risk_assessments(conn)
+    awareness_records = db.get_all_awareness_records(conn)
+    sims_with_dates = db.get_simulation_results_with_campaign_dates(conn)
+
+    period_dates = sorted({a["assessment_date"] for a in assessments})
+
+    points = []
+    for period in period_dates:
+        period_scores = [a["score"] for a in assessments if a["assessment_date"] == period]
+        avg_score = round(sum(period_scores) / len(period_scores), 1) if period_scores else 0.0
+
+        period_awareness = [r for r in awareness_records if r["assessment_date"] == period]
+        training_rate = (
+            round(sum(1 for r in period_awareness if r["training_completed"]) / len(period_awareness) * 100, 1)
+            if period_awareness else 0.0
+        )
+        policy_rate = (
+            round(sum(1 for r in period_awareness if r["policy_acknowledged"]) / len(period_awareness) * 100, 1)
+            if period_awareness else 0.0
+        )
+        avg_awareness = (
+            round(sum(r["awareness_score"] for r in period_awareness) / len(period_awareness), 1)
+            if period_awareness else 0.0
+        )
+
+        # Cumulative phishing exposure as of this period: only campaigns
+        # that had already run by `period` count toward the rate.
+        relevant_sims = [s for s in sims_with_dates if s["campaign_date"] and s["campaign_date"] <= period]
+        opened = [s for s in relevant_sims if s["opened"]]
+        clicked = [s for s in opened if s["clicked"]]
+        reported = [s for s in opened if s["reported"]]
+        click_rate = round(len(clicked) / len(opened) * 100, 1) if opened else 0.0
+        report_rate = round(len(reported) / len(opened) * 100, 1) if opened else 0.0
+
+        points.append(
+            TrendPoint(
+                period_date=period,
+                avg_risk_score=avg_score,
+                training_completion_rate=training_rate,
+                policy_ack_rate=policy_rate,
+                avg_awareness_score=avg_awareness,
+                phishing_click_rate=click_rate,
+                phishing_report_rate=report_rate,
+            )
+        )
+    return points

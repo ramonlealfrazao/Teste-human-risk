@@ -151,6 +151,55 @@ def page_department_analysis(conn):
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def page_trends(conn):
+    st.title("📈 Human Risk Trends")
+    render_disclaimer_banner()
+    st.caption(
+        "Historical periods in this demo are synthetically generated with an "
+        "illustrative improvement trend — not real historical data."
+    )
+
+    trend = analytics.get_trend_series(conn)
+    if not trend:
+        st.warning("No historical data available. Run the seed script to generate it.")
+        return
+
+    df = pd.DataFrame([vars(p) for p in trend])
+    df["period_date"] = pd.to_datetime(df["period_date"])
+
+    st.subheader("Average Human Risk Score Over Time")
+    fig_score = px.line(df, x="period_date", y="avg_risk_score", markers=True)
+    fig_score.update_layout(yaxis_title="Avg Risk Score", xaxis_title="")
+    st.plotly_chart(fig_score, use_container_width=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Training & Policy Completion")
+        fig_training = px.line(
+            df, x="period_date",
+            y=["training_completion_rate", "policy_ack_rate"],
+            markers=True,
+        )
+        fig_training.update_layout(yaxis_title="%", xaxis_title="", legend_title="")
+        st.plotly_chart(fig_training, use_container_width=True)
+
+    with col2:
+        st.subheader("Phishing Simulation Rates")
+        fig_phishing = px.line(
+            df, x="period_date",
+            y=["phishing_click_rate", "phishing_report_rate"],
+            markers=True,
+        )
+        fig_phishing.update_layout(yaxis_title="%", xaxis_title="", legend_title="")
+        st.plotly_chart(fig_phishing, use_container_width=True)
+
+    st.subheader("Average Awareness Score")
+    fig_awareness = px.line(df, x="period_date", y="avg_awareness_score", markers=True)
+    fig_awareness.update_layout(yaxis_title="Avg Awareness Score", xaxis_title="")
+    st.plotly_chart(fig_awareness, use_container_width=True)
+
+
 def page_employee_profile(conn):
     st.title("👤 Employee Risk Profile")
     render_disclaimer_banner()
@@ -221,13 +270,15 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Go to",
-        ["Corporate Dashboard", "Department Analysis", "Employee Profile"],
+        ["Corporate Dashboard", "Department Analysis", "Human Risk Trends", "Employee Profile"],
     )
 
     if page == "Corporate Dashboard":
         page_corporate_dashboard(conn)
     elif page == "Department Analysis":
         page_department_analysis(conn)
+    elif page == "Human Risk Trends":
+        page_trends(conn)
     elif page == "Employee Profile":
         page_employee_profile(conn)
 

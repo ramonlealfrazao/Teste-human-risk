@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
     target_department TEXT,
     completion_rate REAL,
     awareness_score REAL,
-    risk_reduction REAL
+    risk_reduction REAL,
+    campaign_date TEXT
 );
 
 CREATE TABLE IF NOT EXISTS simulation_results (
@@ -202,8 +203,8 @@ def get_latest_awareness_record(conn: sqlite3.Connection, employee_id: str) -> O
 def insert_campaign(conn: sqlite3.Connection, campaign) -> None:
     conn.execute(
         """INSERT OR REPLACE INTO campaigns
-           (campaign_id, name, target_department, completion_rate, awareness_score, risk_reduction)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+           (campaign_id, name, target_department, completion_rate, awareness_score, risk_reduction, campaign_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             campaign.campaign_id,
             campaign.name,
@@ -211,6 +212,7 @@ def insert_campaign(conn: sqlite3.Connection, campaign) -> None:
             campaign.completion_rate,
             campaign.awareness_score,
             campaign.risk_reduction,
+            campaign.campaign_date.isoformat() if campaign.campaign_date else None,
         ),
     )
 
@@ -326,4 +328,32 @@ def insert_risk_action(conn: sqlite3.Connection, employee_id: str, action: str, 
 def get_open_actions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM risk_actions WHERE status = 'open' ORDER BY action_date DESC"
+    ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Historical data for trend charts
+# ---------------------------------------------------------------------------
+
+def get_all_risk_assessments(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every stored assessment (not just the latest per employee) —
+    used to build the Human Risk Trends chart."""
+    return conn.execute(
+        "SELECT * FROM risk_assessments ORDER BY assessment_date ASC"
+    ).fetchall()
+
+
+def get_all_awareness_records(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every stored awareness/training snapshot across all periods."""
+    return conn.execute(
+        "SELECT * FROM awareness_training ORDER BY assessment_date ASC"
+    ).fetchall()
+
+
+def get_simulation_results_with_campaign_dates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Simulation results joined with their campaign's date, so phishing
+    click/report rates can be computed as of any given period."""
+    return conn.execute(
+        """SELECT s.*, c.campaign_date FROM simulation_results s
+           JOIN campaigns c ON s.campaign_id = c.campaign_id"""
     ).fetchall()

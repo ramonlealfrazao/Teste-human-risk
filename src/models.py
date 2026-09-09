@@ -79,3 +79,4 @@ class Campaign:
     completion_rate: float
     awareness_score: float
     risk_reduction: float
+    campaign_date: Optional[date] = None

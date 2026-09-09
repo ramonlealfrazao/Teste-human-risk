@@ -125,8 +125,12 @@ def generate_awareness_records(employees: list[Employee]) -> list[AwarenessRecor
 
 
 def generate_campaigns() -> list[Campaign]:
+    """Spreads the 5 campaigns across the last ~150 days so phishing
+    click/report rates can be tracked over time (see get_trend_series)."""
     campaigns = []
-    for campaign_id, name, target_dept in CAMPAIGN_DEFINITIONS:
+    # Oldest campaign ~150 days ago, most recent ~10 days ago
+    campaign_day_offsets = [150, 115, 80, 45, 10]
+    for (campaign_id, name, target_dept), offset in zip(CAMPAIGN_DEFINITIONS, campaign_day_offsets):
         completion_rate = round(random.uniform(65, 98), 1)
         awareness_score = round(random.uniform(55, 90), 1)
         risk_reduction = round(random.uniform(10, 40), 1)
@@ -138,6 +142,7 @@ def generate_campaigns() -> list[Campaign]:
                 completion_rate=completion_rate,
                 awareness_score=awareness_score,
                 risk_reduction=risk_reduction,
+                campaign_date=TODAY - timedelta(days=offset),
             )
         )
     return campaigns
@@ -205,6 +210,119 @@ def build_risk_inputs_for_employee(
     )
 
 
+# Historical periods (days before TODAY) used to build the Human Risk
+# Trends chart. Oldest first. The last entry (0) always represents the
+# "current" state already generated above — earlier periods are
+# synthesized with a general improvement trend leading up to it, which
+# is a reasonable illustrative assumption for a demo dataset (not real
+# historical data).
+PERIOD_OFFSETS = [150, 120, 90, 60, 30, 0]
+MAX_OFFSET = max(PERIOD_OFFSETS)
+
+
+def _mfa_enable_offset(final_mfa_enabled: bool) -> int | None:
+    """Picks a fictional 'day this employee turned MFA on', so the
+    company-wide MFA adoption trend is derived from real per-employee
+    state rather than a hardcoded curve."""
+    if not final_mfa_enabled:
+        return None
+    return random.randint(20, 140)
+
+
+def generate_historical_records(
+    employees: list[Employee],
+    awareness_by_emp: dict,
+    sim_by_emp: dict,
+    incidents_by_emp: dict,
+) -> tuple[list[AwarenessRecord], dict]:
+    """For each employee, builds one AwarenessRecord and one RiskInputs
+    per historical period, with earlier periods generally worse than the
+    final (offset=0) state — simulating gradual improvement from ongoing
+    awareness training and campaigns.
+
+    Returns (historical_awareness_records, risk_inputs_by_period) where
+    risk_inputs_by_period maps period_offset -> list[RiskInputs].
+    """
+    historical_awareness: list[AwarenessRecord] = []
+    risk_inputs_by_period: dict[int, list[RiskInputs]] = {offset: [] for offset in PERIOD_OFFSETS}
+
+    for emp in employees:
+        final_awareness = awareness_by_emp[emp.employee_id]
+        mfa_enable_offset = _mfa_enable_offset(emp.mfa_enabled)
+
+        for offset in PERIOD_OFFSETS:
+            period_date = TODAY - timedelta(days=offset)
+
+            if offset == 0:
+                awareness_score = final_awareness.awareness_score
+                training_completed = final_awareness.training_completed
+                policy_ack = final_awareness.policy_acknowledged
+            else:
+                trend_fraction = offset / MAX_OFFSET  # 1.0 oldest -> 0.2 for the 30-day mark
+                degrade = int(trend_fraction * random.randint(15, 35))
+                awareness_score = max(15, final_awareness.awareness_score - degrade)
+                training_completed = random.random() > (0.15 + trend_fraction * 0.35)
+                policy_ack = random.random() > (0.05 + trend_fraction * 0.30)
+
+            historical_awareness.append(
+                AwarenessRecord(
+                    employee_id=emp.employee_id,
+                    training_completed=training_completed,
+                    policy_acknowledged=policy_ack,
+                    awareness_score=awareness_score,
+                    assessment_date=period_date,
+                )
+            )
+
+            # Surrogate last_training_date consistent with training_completed
+            if training_completed:
+                last_training_period = period_date - timedelta(days=random.randint(1, 60))
+            else:
+                last_training_period = period_date - timedelta(days=random.randint(120, 300))
+
+            # MFA at this point in time, derived from the fictional enable date
+            if mfa_enable_offset is not None:
+                enable_date = TODAY - timedelta(days=mfa_enable_offset)
+                mfa_at_period = period_date >= enable_date
+            else:
+                mfa_at_period = False
+
+            # Only count phishing campaigns that had already run by this period
+            relevant_sims = [
+                r for r in sim_by_emp.get(emp.employee_id, [])
+                if r.campaign_id in CAMPAIGN_DATE_BY_ID
+                and CAMPAIGN_DATE_BY_ID[r.campaign_id] <= period_date
+            ]
+            clicked_count = sum(1 for r in relevant_sims if r.clicked)
+            not_reported_count = sum(
+                1 for r in relevant_sims if r.opened and not r.clicked and not r.reported
+            )
+
+            incident_count = sum(
+                1 for inc in incidents_by_emp.get(emp.employee_id, [])
+                if inc.incident_date <= period_date
+            )
+
+            repeated_risk = clicked_count >= 2 or (not policy_ack and incident_count > 0)
+
+            risk_inputs_by_period[offset].append(
+                RiskInputs(
+                    employee_id=emp.employee_id,
+                    last_training_date=last_training_period,
+                    mfa_enabled=mfa_at_period,
+                    awareness_score=awareness_score,
+                    policy_acknowledged=policy_ack,
+                    phishing_campaigns_clicked=clicked_count,
+                    phishing_campaigns_not_reported=not_reported_count,
+                    security_incidents=incident_count,
+                    repeated_risk_behavior=repeated_risk,
+                    assessment_date=period_date,
+                )
+            )
+
+    return historical_awareness, risk_inputs_by_period
+
+
 def seed() -> None:
     print("Resetting database...")
     db.reset_db()
@@ -216,11 +334,27 @@ def seed() -> None:
     simulation_results = generate_simulation_results(employees, campaigns)
     incidents = generate_incidents(employees)
 
+    global CAMPAIGN_DATE_BY_ID
+    CAMPAIGN_DATE_BY_ID = {c.campaign_id: c.campaign_date for c in campaigns}
+
+    awareness_by_emp = {r.employee_id: r for r in awareness_records}
+    sim_by_emp: dict[str, list[SimulationResult]] = {}
+    for r in simulation_results:
+        sim_by_emp.setdefault(r.employee_id, []).append(r)
+    incidents_by_emp: dict[str, list[SecurityIncident]] = {}
+    for inc in incidents:
+        incidents_by_emp.setdefault(inc.employee_id, []).append(inc)
+
+    print(f"Building {len(PERIOD_OFFSETS)} historical assessment periods per employee...")
+    historical_awareness, risk_inputs_by_period = generate_historical_records(
+        employees, awareness_by_emp, sim_by_emp, incidents_by_emp
+    )
+
     with db.session() as conn:
         for emp in employees:
             db.insert_employee(conn, emp)
 
-        for record in awareness_records:
+        for record in historical_awareness:
             db.insert_awareness_record(conn, record)
 
         for campaign in campaigns:
@@ -232,32 +366,29 @@ def seed() -> None:
         for incident in incidents:
             db.insert_security_incident(conn, incident)
 
-        # Compute and store one risk assessment per employee
-        awareness_by_emp = {r.employee_id: r for r in awareness_records}
-        sim_by_emp: dict[str, list[SimulationResult]] = {}
-        for r in simulation_results:
-            sim_by_emp.setdefault(r.employee_id, []).append(r)
-        incident_counts = {emp.employee_id: 0 for emp in employees}
-        for inc in incidents:
-            incident_counts[inc.employee_id] += 1
+        print("Calculating Human Risk Scores across all periods...")
+        total_assessments = 0
+        for offset in PERIOD_OFFSETS:
+            for inputs in risk_inputs_by_period[offset]:
+                assessment = assess_employee(inputs)
+                factors_json = json.dumps([asdict(f) for f in assessment.factors])
+                db.insert_risk_assessment(conn, assessment, factors_json)
+                total_assessments += 1
 
-        print("Calculating Human Risk Scores...")
-        for emp in employees:
-            inputs = build_risk_inputs_for_employee(
-                emp,
-                awareness_by_emp[emp.employee_id],
-                sim_by_emp.get(emp.employee_id, []),
-                incident_counts[emp.employee_id],
-            )
-            assessment = assess_employee(inputs)
-            factors_json = json.dumps([asdict(f) for f in assessment.factors])
-            db.insert_risk_assessment(conn, assessment, factors_json)
+                # Only open risk actions for the CURRENT period (offset 0) —
+                # historical periods are for trend charts, not live actions.
+                if offset == 0:
+                    for action in assessment.recommended_actions:
+                        db.insert_risk_action(conn, inputs.employee_id, action, TODAY)
 
-            for action in assessment.recommended_actions:
-                db.insert_risk_action(conn, emp.employee_id, action, TODAY)
+    print(
+        f"Seed complete: {len(employees)} employees, {len(campaigns)} campaigns, "
+        f"{len(simulation_results)} simulation results, {len(incidents)} incidents, "
+        f"{total_assessments} risk assessments across {len(PERIOD_OFFSETS)} periods."
+    )
 
-    print(f"Seed complete: {len(employees)} employees, {len(campaigns)} campaigns, "
-          f"{len(simulation_results)} simulation results, {len(incidents)} incidents.")
+
+CAMPAIGN_DATE_BY_ID: dict = {}
 
 
 if __name__ == "__main__":
